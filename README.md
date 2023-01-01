@@ -1,7 +1,7 @@
 # im7deb-docker
-Creates a deb package for ImageMagick 7 in a docker container
+Creates a deb package for ImageMagick 7 in a docker container.
 
-Output of `im7deb.docker --help`:
+Output of `im7deb-docker --help`:
 ```
 im7deb-docker: Build and create deb package of ImageMagick 7 in a docker image.
 
