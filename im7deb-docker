@@ -1,0 +1,133 @@
+#! /bin/bash
+
+usage() {
+  echo "im7deb-docker: build ImageMagick 7 in a docker image and create deb packages.
+Resulting packages will be stored in /tmp/im7deb.
+docker image and container will be removed.
+
+Usage:
+  im7deb-docker [OPTIONS]
+
+Options:
+  -h, --help              Display this help.
+  --from DIST:RELEASE     Base image to build ImageMagick.
+                            DIST can be one of debian or ubuntu
+                            RELEASE is e.g. xenial or bullseye
+                          Default: Same as host system.
+  -o, --out DIR           Output directory. Default DIR: /tmp/im7deb
+  --podman                Use podman instead of docker.
+  -q                      ImageMagick Quantum Depth (8, 16 or 32)
+                          Default: 16
+
+Dependencies:
+  docker or podman
+
+The IMEI script to build IM7 is used by this docker script.
+Thanks to: https://github.com/SoftCreatR/imei
+"
+  exit 0
+}
+error() {
+  echo "im7deb-docker ERROR: ${1:-}
+  See usage information with: im7deb-docker --help" >&2
+  exit 1
+}
+note() {
+  echo "im7deb-docker: ${1:-}"
+}
+
+Shortoptions="ho:q:"
+Longoptions="from:,help,out:,podman"
+Parsedoptions="$(getopt --options="" --options "$Shortoptions" --longoptions "$Longoptions" -- "$@")"
+eval set -- "$Parsedoptions"
+while [ $# -gt 0 ]; do
+  case "${1:-}" in
+    -h|--help)     usage ;;
+    --from)        Fromimage="${2:-}" ; shift ;;
+    --out)         Outputdir="${2:-}" ; shift ;;
+    --podman)      Backend="podman" ;;
+    -q)            Quantumdepth="${2:-}" ; shift ;;
+    --) ;;
+    *)             error "Unknown option ${1:-}" ;;
+  esac
+  shift
+done
+
+[ -n "$Fromimage" ] && {
+  ID="$(cut -d: -f1 <<< "$Fromimage")"
+  VERSION_CODENAME="$(cut -s -d: -f2 <<< "$Fromimage")"
+}
+[ -z "$ID" ] && {
+  source /etc/os-release
+}
+case "$VERSION_CODENAME" in
+  ""|"latest")
+    error "Option --from: base image must be specified
+  with its release name like 'xenial' or 'bullseye'.
+  Example: --from=debian:bullseye"
+  ;;
+esac
+case "$ID" in
+  debian|ubuntu) ;;
+  *) error "Option --from: Distribution must be one of debian or ubuntu." ;;
+esac
+
+Quantumdepth="${Quantumdepth:-16}"
+Backend="${Backend:-docker}"
+Outputdir="${Outputdir:-/tmp/im7deb}"
+Dockerfiledir="${Outputdir}/docker"
+Im7debimage="im7deb-${VERSION_CODENAME}"
+
+note "Building IM7 on base image: ${ID}:${VERSION_CODENAME}"
+
+Dockerfile="FROM ${ID}:${VERSION_CODENAME}"
+case $ID in
+  debian)
+    Dockerfile="$Dockerfile
+RUN . /etc/os-release && echo \"deb http://deb.debian.org/debian \$VERSION_CODENAME main contrib non-free\" > /etc/apt/sources.list
+RUN . /etc/os-release && echo \"deb-src http://deb.debian.org/debian \$VERSION_CODENAME main contrib non-free\" >>/etc/apt/sources.list"
+  ;;
+  ubuntu)
+    Dockerfile="$Dockerfile
+RUN . /etc/os-release && echo \"deb http://archive.ubuntu.com/ubuntu \$VERSION_CODENAME main restricted\" >/etc/apt/sources.list
+RUN . /etc/os-release && echo \"deb-src http://archive.ubuntu.com/ubuntu \$VERSION_CODENAME main restricted universe multiverse\" >> /etc/apt/sources.list"
+  ;;
+esac
+Dockerfile="$Dockerfile
+RUN apt-get update
+RUN apt-get build-dep imagemagick -y
+RUN apt-get install -y git curl make cmake automake libtool yasm g++ pkg-config perl libde265-dev libx265-dev libltdl-dev libopenjp2-7-dev \
+                       liblcms2-dev libbrotli-dev libzip-dev libbz2-dev liblqr-1-0-dev libzstd-dev libgif-dev libjpeg-dev libopenexr-dev \
+                       libpng-dev libwebp-dev librsvg2-dev libwmf-dev libxml2-dev libtiff-dev libraw-dev ghostscript gsfonts ffmpeg \
+                       libpango1.0-dev libdjvulibre-dev libfftw3-dev libgs-dev libgraphviz-dev && \
+    apt-get install -y lsb-release wget
+RUN . /etc/os-release && \
+    wget https://dist.1-2.dev/imei.sh && \
+    chmod +x imei.sh && \
+    sed -i 's%/usr/local%/usr%g ;\
+            s/imei-//g ;\
+            s/make\$/make ; make install/ ;\
+\
+            s/--disable-opencl/--enable-opencl/ ;\
+            s/--without-tcmalloc/--with-tcmalloc/ ;\
+\
+            s/--requires=\"pkg-config\"/--requires=\"pkg-config,libraqm0\"/ ;\
+            s/--pkgrelease=\"imei\$INSTALLER_VER\"/--pkgrelease=\"\${ID}-\${VERSION_CODENAME}-Q${Quantumdepth}\"/g ;\
+            s/rm -rf \"\$WORK_DIR\"/:/ ;\
+            s/echo -ne \"\\\\ec\"//g ;\
+            ' imei.sh
+RUN . /etc/os-release && export ID VERSION_CODENAME && ./imei.sh --checkinstall --no-sig-verify --no-backports --skip-aom --skip-heif --skip-jxl --im-q $Quantumdepth
+CMD cp /usr/src/*.deb /tmp/im7deb/"
+
+mkdir -p "${Dockerfiledir}"
+echo "${Dockerfile}" > "${Dockerfiledir}/Dockerfile"
+
+$Backend build -t "${Im7debimage}" "${Dockerfiledir}"                     || error "Failed: $Backend build -t ${Im7debimage}"
+$Backend run --rm --volume "${Outputdir}":"${Outputdir}" "${Im7debimage}" || error "Failed: $Backend run ${Im7debimage}"
+$Backend rmi "${Im7debimage}"                                             || error "Failed: $Backend rmi ${Im7debimage}"
+rm -r "${Dockerfiledir}"
+
+note "Ready:
+"
+ls -l "${Outputdir}"
+exit 0
