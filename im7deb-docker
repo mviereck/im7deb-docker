@@ -115,6 +115,7 @@ RUN . /etc/os-release && \
 \
             s/--requires=\"pkg-config\"/--requires=\"pkg-config,libraqm0\"/ ;\
             s/--pkgrelease=\"imei\$INSTALLER_VER\"/--pkgrelease=\"\${ID}-\${VERSION_CODENAME}-Q${Quantumdepth}\"/g ;\
+            s/--pkgversion=\"\$IMAGEMAGICK_VER\"/--pkgversion=8:\"\$IMAGEMAGICK_VER\"/g ;\
             s/rm -rf \"\$WORK_DIR\"/:/ ;\
             s/echo -ne \"\\\\ec\"//g ;\
             ' imei.sh
